@@ -101,54 +101,125 @@ if "ui_language" not in st.session_state:
 # -------------------------
 # Gemini helper (tries modern model names)
 # -------------------------
-def safe_gemini_generate_text(prompt: str, temperature: float = 0.2):
+def safe_gemini_generate_text(prompt: str, temperature: float = 0.2, max_output_tokens: int = 512):
     """
-    Safe wrapper for Gemini text generation.
-    Uses stable models: models/gemini-pro and models/gemini-pro-latest
+    Robust wrapper for calling Gemini (google.generativeai).
+    Tries multiple call signatures to be compatible with different SDK versions.
+    Returns generated text or a friendly error string (no exception thrown).
     """
+
+    # Try to prefer key from st.secrets if available (Streamlit Cloud)
+    api_key = API_KEY
+    try:
+        # st.secrets may exist - prefer it if present
+        s_key = st.secrets.get("GOOGLE_API_KEY") if hasattr(st, "secrets") else None
+        if s_key:
+            api_key = s_key
+    except Exception:
+        pass
 
     if not GEMINI_AVAILABLE:
         return "Gemini SDK is not installed."
 
-    if not API_KEY:
+    if not api_key:
         return "Gemini API key is missing."
 
-    model_names = [
+    # Ensure genai configured (attempt again in case earlier config was skipped)
+    try:
+        if hasattr(genai, "configure"):
+            genai.configure(api_key=api_key)
+        elif hasattr(genai, "init"):
+            genai.init(api_key=api_key)
+    except Exception:
+        # continue; if configuration fails we'll try calls and surface error later
+        pass
+
+    # Candidate model names - adjust if your account supports different names
+    model_candidates = [
         "models/gemini-pro",
-        "models/gemini-pro-latest"
+        "models/gemini-pro-latest",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
     ]
 
-    last_error = None
+    last_exc = None
 
-    for model_name in model_names:
+    for model_name in model_candidates:
         try:
-            resp = genai.generate_text(
-                model=model_name,
-                prompt=prompt,
-                temperature=temperature
-            )
+            # 1) Newer genai: genai.generate_text
+            if hasattr(genai, "generate_text"):
+                try:
+                    resp = genai.generate_text(
+                        model=model_name,
+                        prompt=prompt,
+                        temperature=temperature,
+                        max_output_tokens=max_output_tokens,
+                    )
+                except TypeError:
+                    # some versions use different kw names - try without max_output_tokens
+                    resp = genai.generate_text(model=model_name, prompt=prompt, temperature=temperature)
 
-            return getattr(resp, "text", None) or getattr(resp, "result", None)
-
-        except Exception as e:
-            last_error = e
-            continue
-
-    return f"Gemini model failed: {last_error}"
-
-            # Try older class patterns
-            if hasattr(genai, "GenerativeModel"):
-                model = genai.GenerativeModel(model_name)
-                if hasattr(model, "generate_content"):
-                    resp = model.generate_content(prompt)
-                    text = getattr(resp, "text", None) or str(resp)
+                if isinstance(resp, str):
+                    return resp
+                # attempt common attributes
+                text = getattr(resp, "text", None) or getattr(resp, "result", None) or str(resp)
+                if text:
                     return text
-            raise RuntimeError("No supported genai invocation pattern found in installed SDK.")
+
+            # 2) Some versions expose genai.models.generate
+            if hasattr(genai, "models") and hasattr(genai.models, "generate"):
+                try:
+                    resp = genai.models.generate(model=model_name, content=prompt, temperature=temperature, max_output_tokens=max_output_tokens)
+                except TypeError:
+                    # fallback if signature differs
+                    resp = genai.models.generate(model=model_name, content=prompt, temperature=temperature)
+                # resp could be object/dict
+                text = getattr(resp, "text", None) or getattr(resp, "result", None)
+                if not text:
+                    # try dict-like
+                    try:
+                        if isinstance(resp, dict):
+                            # common fields
+                            if "candidates" in resp and resp["candidates"]:
+                                cand = resp["candidates"][0]
+                                if isinstance(cand, dict) and "content" in cand:
+                                    return cand["content"]
+                                return str(cand)
+                            if "content" in resp:
+                                return resp["content"]
+                    except Exception:
+                        pass
+                else:
+                    return text
+
+            # 3) Older/newer class-based patterns
+            if hasattr(genai, "GenerativeModel"):
+                try:
+                    model = genai.GenerativeModel(model_name)
+                    # some wrappers use generate_content
+                    if hasattr(model, "generate_content"):
+                        out = model.generate_content(prompt)
+                        if hasattr(out, "text"):
+                            return out.text
+                        return str(out)
+                except Exception:
+                    pass
+
+            # If nothing returned, try stringifying last response object if available
+            try:
+                return str(resp)
+            except Exception:
+                pass
+
         except Exception as e:
             last_exc = e
+            # try next model
             continue
-    # If none worked, raise the last exception
-    raise last_exc or RuntimeError("Gemini call failed for unknown reason.")
+
+    # Nothing worked
+    if last_exc:
+        return f"Gemini error: {repr(last_exc)}"
+    return "Gemini call failed for unknown reason."
 
 # -------------------------
 # High-level assistant functions

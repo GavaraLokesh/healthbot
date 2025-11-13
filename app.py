@@ -111,8 +111,11 @@ def safe_gemini_generate_text(prompt: str, model_names=None, temperature: float 
     if not API_KEY:
         raise RuntimeError("Gemini API key not set in environment.")
     # default to working model names (updated)
-    if model_names is None:
-     model_names = ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest"]
+if model_names is None:
+    model_names = [
+        "models/gemini-pro",
+        "models/gemini-pro-latest"
+    ]
     last_exc = None
     for model_name in model_names:
         try:

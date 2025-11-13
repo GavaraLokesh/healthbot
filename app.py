@@ -112,7 +112,7 @@ def safe_gemini_generate_text(prompt: str, model_names=None, temperature: float 
         raise RuntimeError("Gemini API key not set in environment.")
     # default to working model names (updated)
     if model_names is None:
-        model_names = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+        model_names = ["gemini-1.5-flash"]
     last_exc = None
     for model_name in model_names:
         try:

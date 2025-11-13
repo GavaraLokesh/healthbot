@@ -101,50 +101,41 @@ if "ui_language" not in st.session_state:
 # -------------------------
 # Gemini helper (tries modern model names)
 # -------------------------
-def safe_gemini_generate_text(prompt: str, model_names=None, temperature: float = 0.2, max_output_tokens: int = 512):
+def safe_gemini_generate_text(prompt: str, temperature: float = 0.2):
     """
-    Attempts to call the installed genai SDK with a list of model names (in order).
-    Returns generated text or raises an exception describing the failure.
+    Safe wrapper for Gemini text generation.
+    Uses stable models: models/gemini-pro and models/gemini-pro-latest
     """
+
     if not GEMINI_AVAILABLE:
-        raise RuntimeError("Gemini SDK not installed in this environment.")
+        return "Gemini SDK is not installed."
+
     if not API_KEY:
-        raise RuntimeError("Gemini API key not set in environment.")
-    # default to working model names (updated)
-if model_names is None:
+        return "Gemini API key is missing."
+
     model_names = [
         "models/gemini-pro",
         "models/gemini-pro-latest"
     ]
-    last_exc = None
+
+    last_error = None
+
     for model_name in model_names:
         try:
-            # Try common modern function: genai.generate_text
-            if hasattr(genai, "generate_text"):
-                resp = genai.generate_text(model=model_name, prompt=prompt, temperature=temperature, max_output_tokens=max_output_tokens)
-                # resp might be string or object
-                if isinstance(resp, str):
-                    return resp
-                text = getattr(resp, "text", None) or getattr(resp, "result", None) or str(resp)
-                return text
-            # Try genai.models.generate pattern
-            if hasattr(genai, "models") and hasattr(genai.models, "generate"):
-                resp = genai.models.generate(model=model_name, content=prompt, temperature=temperature, max_output_tokens=max_output_tokens)
-                # attempt common fields
-                text = getattr(resp, "text", None)
-                if text:
-                    return text
-                try:
-                    if isinstance(resp, dict):
-                        # check candidates/content
-                        if "candidates" in resp and resp["candidates"]:
-                            cand = resp["candidates"][0]
-                            if isinstance(cand, dict) and "content" in cand:
-                                return cand["content"]
-                            return str(cand)
-                except Exception:
-                    pass
-                return str(resp)
+            resp = genai.generate_text(
+                model=model_name,
+                prompt=prompt,
+                temperature=temperature
+            )
+
+            return getattr(resp, "text", None) or getattr(resp, "result", None)
+
+        except Exception as e:
+            last_error = e
+            continue
+
+    return f"Gemini model failed: {last_error}"
+
             # Try older class patterns
             if hasattr(genai, "GenerativeModel"):
                 model = genai.GenerativeModel(model_name)
